@@ -2,16 +2,16 @@
 #include <conio.h>
 #include <iostream>
 #include <vector>
-#include <string>
 #include <ctime>
+#include <thread>
 using namespace std;
 
 void showConsoleCursor(bool);
 void printWalls(HANDLE);
-void newSnakeCoords(vector<COORD>&, int, char);
-void checkWallContact(COORD&, bool&, bool);
+void newSnakeCoords(vector<COORD>&, int);
+void checkWallContact(COORD&, bool);
 COORD newTarget(vector<COORD>, HANDLE);
-void getInput(char&);
+void getInput();
 
 // field dimensions
 const int leftEdge = 29;
@@ -19,16 +19,19 @@ const int rightEdge = 72;
 const int topEdge = 5;
 const int bottomEdge = 19;
 
+char snakeDirection = 'd';
+bool gameOver = false;
+
 int main()
 {
-	// game settings
-	bool loopedField = true; // if false, the walls are deadly
-	int snakeSpeed = 90;     // milliseconds of pause per snake movement (a greater number makes the snake slower)
-	int snakeGrowthRate = 4; // segments gained per target hit
+	const bool deadlyWalls = false;
+	const int snakeSpeed = 40;     // milliseconds of pause per snake movement (a greater number makes the snake slower). Recommended value: 40
+	const int snakeGrowthRate = 4; // per target hit. Recommended value: 4
+
 	const char scales = 178; // the ascii char for the snake's segments
 	const char food = 254;   // the ascii char for the snake's food
 	showConsoleCursor(false);
-	short snakeStartX = (leftEdge + rightEdge) / 2, // snake starting coordinates
+	const short snakeStartX = (leftEdge + rightEdge) / 2, // snake starting coordinates
 		snakeStartY = (topEdge + bottomEdge) / 2;
 	
 	vector<COORD> snake;
@@ -55,10 +58,11 @@ int main()
 
 	while (true)
 	{
+		// continuously check for input from the user in a separate thread
+		thread userInput(getInput);
+
 		int score = 0,
 			head = 0;
-		char direction = 'd';
-		bool gameOver = false;
 
 		system("cls"); // clear screen
 		snake.clear();
@@ -78,22 +82,18 @@ int main()
 			head = (head + 1) % snake.size(); // The snake coordinate vector is a circular queue. The snake grows as the vector does.
 			Sleep(snakeSpeed);
 
-			// check for input from the user
-			getInput(direction);
-
 			HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
 			if (hStdOut == INVALID_HANDLE_VALUE)
 				return 0;
 
 			// erase the oldest snake segment
-			if (head < snake.size() - 1)
-				SetConsoleCursorPosition(hStdOut, snake[head + 1]);
-			else
-				SetConsoleCursorPosition(hStdOut, snake[0]);
+			SetConsoleCursorPosition(hStdOut, snake[(head + 1) % snake.size()]);
 			cout << ' ';
 
-			newSnakeCoords(snake, head, direction);
-			checkWallContact(snake[head], gameOver, loopedField);
+			newSnakeCoords(snake, head);
+			checkWallContact(snake[head], deadlyWalls);
+			if (gameOver)
+				userInput.join();
 
 			// print the new snake segment
 			SetConsoleTextAttribute(hStdOut, FOREGROUND_GREEN | BACKGROUND_GREEN | BACKGROUND_INTENSITY);
@@ -119,6 +119,7 @@ int main()
 				if (i != head && snake[i].X == snake[head].X && snake[i].Y == snake[head].Y)
 				{
 					gameOver = true;
+					userInput.join();
 					SetConsoleTextAttribute(hStdOut, FOREGROUND_RED);
 					SetConsoleCursorPosition(hStdOut, snake[i]);
 					cout << scales;
@@ -141,6 +142,8 @@ int main()
 			if (playAgain == 'n')
 				return 0;
 		} while (playAgain != 'y');
+
+		gameOver = false;
 	}
 }
 
@@ -181,7 +184,7 @@ void printWalls(HANDLE hStdOut)
 	SetConsoleTextAttribute(hStdOut, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
 }
 
-void newSnakeCoords(vector<COORD>& snake, int head, char direction)
+void newSnakeCoords(vector<COORD>& snake, int head)
 {
 	// copy previous head elements' coords into new head element
 	if (head > 0)
@@ -190,7 +193,7 @@ void newSnakeCoords(vector<COORD>& snake, int head, char direction)
 		snake[head] = snake[snake.size() - 1];
 
 	// modify new head elements' coords based on direction
-	switch (direction)
+	switch (snakeDirection)
 	{
 	case 'w':
 		snake[head].Y -= 1;
@@ -206,10 +209,16 @@ void newSnakeCoords(vector<COORD>& snake, int head, char direction)
 	}
 }
 
-void checkWallContact(COORD& head, bool& gameOver, bool loopedField)
+void checkWallContact(COORD& head, bool deadlyWalls)
 {
-	if (loopedField)
+	if (deadlyWalls)
 	{
+		if (head.Y < topEdge || head.Y > bottomEdge	|| head.X < leftEdge || head.X > rightEdge)
+			gameOver = true;
+	}
+	else
+	{
+		// loop the field
 		if (head.Y < topEdge)
 			head.Y = bottomEdge;
 		else if (head.Y > bottomEdge)
@@ -218,17 +227,6 @@ void checkWallContact(COORD& head, bool& gameOver, bool loopedField)
 			head.X = rightEdge;
 		else if (head.X > rightEdge)
 			head.X = leftEdge;
-	}
-	else // touching the walls causes death
-	{
-		if (head.Y < topEdge)
-			gameOver = true;
-		else if (head.Y > bottomEdge)
-			gameOver = true;
-		else if (head.X < leftEdge)
-			gameOver = true;
-		else if (head.X > rightEdge)
-			gameOver = true;
 	}
 }
 
@@ -239,7 +237,8 @@ COORD newTarget(vector<COORD> snake, HANDLE hStdOut)
 
 	do
 	{
-		target = { leftEdge + rand() % (rightEdge - leftEdge + 1), topEdge + rand() % (bottomEdge - topEdge + 1) };
+		target = { leftEdge + rand() % (rightEdge - leftEdge + 1),
+			topEdge + rand() % (bottomEdge - topEdge + 1) };
 		
 		// prevent the target from appearing inside the snake
 		for (int i = 0; i < snake.size(); i++)
@@ -258,14 +257,20 @@ COORD newTarget(vector<COORD> snake, HANDLE hStdOut)
 	return target;
 }
 
-void getInput(char& direction)
+void getInput()
 {
-	if (_kbhit())
+	while (!gameOver)
 	{
-		char input = tolower(_getch());
+		if (_kbhit())
+		{
+			char input = tolower(_getch());
 
-		if (input == 'w' && direction != 's' || input == 'a' && direction != 'd'
-			|| input == 's' && direction != 'w' || input == 'd' && direction != 'a')
-			direction = input;
+			if (input == 'w' && snakeDirection != 's' || input == 'a' && snakeDirection != 'd'
+				|| input == 's' && snakeDirection != 'w' || input == 'd' && snakeDirection != 'a')
+				snakeDirection = input;
+		}
+
+		// reduce CPU usage down from 100% for this thread
+		this_thread::sleep_for(25ms);
 	}
 }
